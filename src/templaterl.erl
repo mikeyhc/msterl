@@ -4,6 +4,8 @@
 -export([render_file/1, render_file/2, render_file/3,
          render_string/1, render_string/2, render_string/3]).
 
+-record(render_opts, {ctx, partials, indent="", last=none}).
+
 %%====================================================================
 %% API
 %%====================================================================
@@ -25,47 +27,76 @@ render_string(Template, Data) ->
     render_string(Template, Data, #{}).
 
 render_string(Template, Data, Partials) ->
-    ParsedTemplate = mst_parser:parse(Template, Partials),
-    render(ParsedTemplate, mst_context:new(Data), []).
+    ParsedTemplate = mst_parser:parse(Template),
+    ParsedPartials = mst_partials:parse(Partials),
+    io:format("~p~n~p~n~p~n", [ParsedTemplate, Data, ParsedPartials]),
+    render(ParsedTemplate, #render_opts{ctx=mst_context:new(Data),
+                                        partials=ParsedPartials},
+           []).
 
 %%====================================================================
 %% helper functions
 %%====================================================================
 
-render([], _Context, Acc) -> lists:flatten(Acc);
-render([{literal, L}|T], Context, Acc) -> render(T, Context, [L|Acc]);
-render([{sanitized_block, B}|T], Context, Acc) ->
+render([], _Opts, Acc) -> lists:flatten(lists:reverse(Acc));
+render([{literal, L}|T], Opts, Acc) ->
+    render(T, set_last(literal, Opts), [apply_indent(L, Opts)|Acc]);
+render([{sanitized_block, B}|T], Opts=#render_opts{ctx=Context}, Acc) ->
     try
         Value = case B of
                     [$&|Key] -> coerce(mst_context:get_value(Key, Context),
                                        false);
                     Key -> coerce(mst_context:get_value(Key, Context), true)
                 end,
-        render(T, Context, [Value|Acc])
+        render(T, set_last(block, Opts), [apply_indent(Value, Opts)|Acc])
     catch
         E={invalid_dot_context, _, _} -> throw({E, {block, B}, {template, T},
                                                 {rendered, Acc}})
     end;
-render([{unsanitized_block, B}|T], Context, Acc) ->
-    render(T, Context, [coerce(mst_context:get_value(B, Context), false)|Acc]);
-render([{section, SectionName, Section}|T], Context, Acc) ->
+render([{unsanitized_block, B}|T], Opts=#render_opts{ctx=Context}, Acc) ->
+    Output = apply_indent(coerce(mst_context:get_value(B, Context), false),
+                          Opts),
+    render(T, set_last(block, Opts), [Output|Acc]);
+render([{section, SectionName, Section}|T], Opts=#render_opts{ctx=Context},
+       Acc) ->
     NewContext = mst_context:get_value(SectionName, Context),
     Render = case is_falsy(NewContext) of
                  true -> [];
                  false ->
-                     eval_section(Section,
-                                  mst_context:push_context(NewContext, Context))
+                     Ctx = mst_context:push_context(NewContext, Context),
+                     eval_section(Section, Opts#render_opts{ctx=Ctx})
              end,
-    render(T, Context, [Render|Acc]).
+    render(T, set_last(block, Opts), [Render|Acc]);
+render([{inverted_section, SectionName, Section}|T],
+       Opts=#render_opts{ctx=Context},
+       Acc) ->
+    NewContext = mst_context:get_value(SectionName, Context),
+    Render = case not is_falsy(NewContext) of
+                 true -> [];
+                 false ->
+                     Ctx = mst_context:push_context(NewContext, Context),
+                     eval_section(Section, Opts#render_opts{ctx=Ctx})
+             end,
+    render(T, set_last(block, Opts), [Render|Acc]);
+render([{partial, PartialName, Indent}|T],
+       Opts=#render_opts{partials=Partials},
+       Acc) ->
+    Render = case maps:find(PartialName, Partials) of
+                 {ok, Body} ->
+                     render(Body, Opts#render_opts{indent=Indent}, []);
+                 error -> ""
+             end,
+    render(T, set_last(block, Opts), [Render|Acc]).
 
-eval_section(Section, Context) ->
-    eval_section(Section, Context, []).
+eval_section(Section, Opts) -> eval_section(Section, Opts, []).
 
-eval_section(Section, Context, Acc) ->
-    Render = render(Section, Context, []),
+eval_section(Section, Opts=#render_opts{ctx=Context}, Acc) ->
+    Render = render(Section, Opts, []),
     case mst_context:next_context(Context) of
         {true, NextContext} ->
-            eval_section(Section, NextContext, [Render|Acc]);
+            eval_section(Section,
+                         Opts#render_opts{ctx=NextContext},
+                         [Render|Acc]);
         false -> lists:flatten(lists:reverse([Render|Acc]))
     end.
 
@@ -92,3 +123,10 @@ coerce(Value, _Sanitize) when is_float(Value) ->
     io_lib:format("~p", [Value]);
 coerce(Value, false) when is_binary(Value) -> binary_to_list(Value);
 coerce(Value, true) when is_binary(Value) -> sanitize(binary_to_list(Value)).
+
+set_last(Type, Opts) -> Opts#render_opts{last=Type}.
+
+apply_indent(Literal, #render_opts{last=Last, indent=Indent})
+  when Last =:= none orelse Last =:= literal ->
+    Indent ++ Literal;
+apply_indent(Literal, _Opts) -> Literal.

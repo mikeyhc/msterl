@@ -1,86 +1,91 @@
 -module(mst_parser).
 
--export([parse/2]).
+-export([parse/1]).
 
 -record(parsed_template, {literal_buffer=[] :: string(),
                           standalone=true :: boolean(),
-                          last_block=none :: none | comment | block | section,
-                          partials :: #{string() => string()},
+                          last_block=none :: none | comment | block | section |
+                                             partial,
                           template=[]
                          }).
 
-parse(Template, Partials) ->
-    ParsedTemplate0 = parse_(Template, #parsed_template{
-                                          partials=stringify_keys(Partials)
-                                         }),
+parse(Template) ->
+    ParsedTemplate0 = parse(Template, #parsed_template{}),
     ParsedTemplate1 = finalize(ParsedTemplate0, true),
-    ParsedTemplate1#parsed_template.template.
+    lists:reverse(ParsedTemplate1#parsed_template.template).
 
 section_recur(Template, ParseState) ->
     NPS = ParseState#parsed_template{literal_buffer=[],
                                      template=[]
                                     },
-    parse_(Template, NPS).
+    parse(Template, NPS).
 
-parse_([], ParsedTemplate) -> ParsedTemplate;
+parse([], ParsedTemplate) -> ParsedTemplate;
 % comment
-parse_([${, ${, $!|Rest0], PT0) ->
+parse([${, ${, $!|Rest0], PT0) ->
     Rest1 = drop_til_close(Rest0),
     {PT1, Rest2} = case is_standalone(PT0) of
                        true -> {drop_buffer(PT0), drop_newline(Rest1)};
                        false -> {PT0, Rest1}
                    end,
-    parse_(Rest2, PT1#parsed_template{last_block=comment});
+    parse(Rest2, PT1#parsed_template{last_block=comment});
 % partial
-parse_([${, ${, $>|Rest0],
-       ParsedTemplate=#parsed_template{partials=Partials}) ->
+parse([${, ${, $>|Rest0], ParsedTemplate0) ->
     {PartialName, Rest1} = read_til_close(Rest0, false),
-    Rest2 = case maps:find(PartialName, Partials) of
-                {ok, Partial} -> Partial ++ Rest1;
-                error -> Rest1
-            end,
-    parse_(Rest2, ParsedTemplate);
+    Indent = get_indent(ParsedTemplate0),
+    ParsedTemplate1 = flush_buffer(ParsedTemplate0, Rest1),
+    parse(Rest1, push_block({partial, PartialName, Indent}, ParsedTemplate1));
 % section begin
-parse_([${, ${, $#|Rest0], ParsedTemplate0) ->
-    {SectionName, Rest1} = read_til_close(Rest0, false),
-    {Section, Rest2} = section_recur(Rest1, ParsedTemplate0),
-    {section, SectionName, SectionTemplate} = Section,
-    ParsedTemplate1 = ParsedTemplate0#parsed_template{
-                        standalone=SectionTemplate#parsed_template.standalone
-                       },
-    ParsedTemplate2 = flush_buffer(ParsedTemplate1, Rest1),
-    Block = {section, SectionName, SectionTemplate#parsed_template.template},
-    parse_(Rest2, push_block(Block, ParsedTemplate2));
+parse([${, ${, $#|Rest], ParsedTemplate) ->
+    parse_section(Rest, ParsedTemplate, false);
+% inverted section
+parse([${, ${, $^|Rest], ParsedTemplate) ->
+    parse_section(Rest, ParsedTemplate, true);
 % section close
-parse_([${, ${, $/|Rest0], ParsedTemplate0) ->
+parse([${, ${, $/|Rest0], ParsedTemplate0) ->
     {SectionName, Rest1} = read_til_close(Rest0, false),
-    ParsedTemplate1 = finalize(ParsedTemplate0, length(Rest1) =:= 0),
+    ParsedTemplate1 = flush_buffer(ParsedTemplate0, Rest1),
     {{section, SectionName, ParsedTemplate1}, Rest1};
 % triple moustache
-parse_([${, ${, ${|Rest0], ParsedTemplate) ->
+parse([${, ${, ${|Rest0], ParsedTemplate) ->
     {Block, Rest1} = read_til_close(Rest0, true),
-    parse_(Rest1, push_block({unsanitized_block, Block}, ParsedTemplate));
+    parse(Rest1, push_block({unsanitized_block, Block}, ParsedTemplate));
 % moustache block
-parse_([${, ${|Rest0], ParsedTemplate) ->
+parse([${, ${|Rest0], ParsedTemplate) ->
     {Block, Rest1} = read_til_close(Rest0, false),
-    parse_(Rest1, push_block({sanitized_block, Block}, ParsedTemplate));
+    parse(Rest1, push_block({sanitized_block, Block}, ParsedTemplate));
 % string literal
-parse_([H|T], ParsedTemplate) ->
-    parse_(T, push_literal(H, ParsedTemplate)).
+parse([H|T], ParsedTemplate) ->
+    parse(T, push_literal(H, ParsedTemplate)).
 
 
 %%====================================================================
 %% helper methods
 %%====================================================================
 
+parse_section(Rest0, ParsedTemplate0, Invert) ->
+    {SectionName, Rest1} = read_til_close(Rest0, false),
+    ParsedTemplate1 = flush_buffer(ParsedTemplate0, Rest1),
+    {Section, Rest2} = section_recur(Rest1, ParsedTemplate1),
+    {section, SectionName, SectionTemplate} = Section,
+    ParsedTemplate2 = ParsedTemplate1#parsed_template{
+                        standalone=SectionTemplate#parsed_template.standalone
+                       },
+    Body = lists:reverse(SectionTemplate#parsed_template.template),
+    Block = if Invert -> {inverted_section, SectionName, Body};
+               true -> {section, SectionName, Body}
+            end,
+    parse(Rest2, push_block(Block, ParsedTemplate2)).
+
 is_standalone(#parsed_template{standalone=I, last_block=B}) ->
-    I andalso (B =:= comment orelse B =:= section).
+    I andalso (B =:= comment orelse B =:= section orelse B =:= partial).
 
 drop_buffer(ParsedTemplate) ->
     ParsedTemplate#parsed_template{literal_buffer=[]}.
 
 push_literal($\n, PT=#parsed_template{standalone=true, last_block=LB}) when
-      LB =:= comment orelse LB =:= section orelse LB =:= none ->
+      LB =:= comment orelse LB =:= section orelse LB =:= partial orelse
+      LB =:= none ->
     PT#parsed_template{literal_buffer=[], last_block=none};
 push_literal($\n, PT=#parsed_template{literal_buffer=LB, template=T}) ->
     PT#parsed_template{literal_buffer=[],
@@ -95,10 +100,21 @@ push_literal(C, PT=#parsed_template{literal_buffer=B}) ->
     PT#parsed_template{literal_buffer=[C|B], standalone=Standalone}.
 
 push_block(Block, PT=#parsed_template{literal_buffer=[], template=T}) ->
-    PT#parsed_template{template=[Block|T], last_block=block_type(Block)};
+    BlockType = block_type(Block),
+    Standalone = if BlockType =:= block -> false;
+                    true -> PT#parsed_template.standalone
+                 end,
+    PT#parsed_template{template=[Block|T],
+                       standalone=Standalone,
+                       last_block=BlockType};
 push_block(Block, PT=#parsed_template{literal_buffer=LB, template=T}) ->
+    BlockType = block_type(Block),
+    Standalone = if BlockType =:= block -> false;
+                    true -> PT#parsed_template.standalone
+                 end,
     PT#parsed_template{literal_buffer=[],
-                       last_block=block_type(Block),
+                       standalone=Standalone,
+                       last_block=BlockType,
                        template=[Block, {literal, lists:reverse(LB)}|T]}.
 
 finalize(PT=#parsed_template{literal_buffer=[]}, _End) -> PT;
@@ -124,8 +140,10 @@ drop_newline([$\r, $\n|T]) -> T;
 drop_newline(L) -> L.
 
 block_type({section, _, _}) -> section;
+block_type({inverted_section, _, _}) -> section;
 block_type({unsanitized_block, _}) -> block;
-block_type({sanitized_block, _}) -> block.
+block_type({sanitized_block, _}) -> block;
+block_type({partial, _, _}) -> partial.
 
 is_whitespace($ ) -> true;
 is_whitespace($\t) -> true;
@@ -134,6 +152,8 @@ is_whitespace($\n) -> true;
 is_whitespace(_) -> false.
 
 flush_buffer(PT=#parsed_template{literal_buffer=[]}, _Rest) -> PT;
+flush_buffer(PT=#parsed_template{standalone=false}, Rest) ->
+    finalize(PT, length(Rest) =:= 0);
 flush_buffer(PT=#parsed_template{literal_buffer=Buffer}, Rest) ->
     End = length(Rest) =:= 0,
     case lists:all(fun is_whitespace/1, Buffer) of
@@ -146,7 +166,7 @@ flush_buffer(PT=#parsed_template{literal_buffer=Buffer}, Rest) ->
         _ -> finalize(PT, End)
     end.
 
-should_flush([]) -> false;
+should_flush([]) -> true;
 should_flush([$\n|_]) -> true;
 should_flush([H|T]) ->
     case is_whitespace(H) of
@@ -154,8 +174,9 @@ should_flush([H|T]) ->
         false -> false
     end.
 
-stringify_keys(Partials) ->
-    maps:from_list(lists:map(fun stringify_key/1, maps:to_list(Partials))).
-
-stringify_key({K, V}) when is_atom(K) -> {atom_to_list(K), V};
-stringify_key(V) -> V.
+get_indent(#parsed_template{standalone=false}) -> "";
+get_indent(#parsed_template{literal_buffer=Buffer}) ->
+    case lists:all(fun is_whitespace/1, Buffer) of
+        true -> Buffer;
+        false -> ""
+    end.

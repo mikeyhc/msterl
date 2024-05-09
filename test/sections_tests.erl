@@ -230,9 +230,9 @@ indented_standalone_lines_test_() ->
                   "|\n"
                   "| A Line",
                   render_string("| This Is\n"
-                                "{{#boolean}}\n"
+                                "  {{#boolean}}\n"
                                 "|\n"
-                                "{{/boolean}}\n"
+                                "  {{/boolean}}\n"
                                 "| A Line",
                                 #{boolean => true})).
 
