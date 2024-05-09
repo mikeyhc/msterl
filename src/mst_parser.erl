@@ -6,11 +6,13 @@
                           standalone=true :: boolean(),
                           last_block=none :: none | comment | block | section |
                                              partial,
-                          template=[]
+                          template=[],
+                          start_delimiter="{{",
+                          end_delimiter="}}"
                          }).
 
 parse(Template) ->
-    ParsedTemplate0 = parse(Template, #parsed_template{}),
+    {[], ParsedTemplate0} = parse(Template, #parsed_template{}),
     ParsedTemplate1 = finalize(ParsedTemplate0, true),
     lists:reverse(ParsedTemplate1#parsed_template.template).
 
@@ -20,51 +22,48 @@ section_recur(Template, ParseState) ->
                                     },
     parse(Template, NPS).
 
-parse([], ParsedTemplate) -> ParsedTemplate;
-% comment
-parse([${, ${, $!|Rest0], PT0) ->
-    Rest1 = drop_til_close(Rest0),
+parse(Template, ParsedTemplate=#parsed_template{start_delimiter=Start}) ->
+    MatchFn = fun([$!|Rest], State) -> parse_comment(Rest, State);
+                 ([$>|Rest], State) -> parse_partial(Rest, State);
+                 ([$#|Rest], State) -> parse_section(Rest, State, false);
+                 ([$^|Rest], State) -> parse_section(Rest, State, true);
+                 ([$/|Rest], State) -> parse_section_close(Rest, State);
+                 ([${|Rest], State) -> parse_triple(Rest, State);
+                 ([$=|Rest], State) -> parse_delimiter(Rest, State);
+                 (Rest, State) -> parse_basic(Rest, State)
+              end,
+    NoMatchFn = fun(C, State) -> push_literal(C, State) end,
+    read_loop(Template, Start, MatchFn, NoMatchFn, ParsedTemplate).
+
+parse_comment(Rest0, PT0) ->
+    Rest1 = drop_til_close(Rest0, PT0),
     {PT1, Rest2} = case is_standalone(PT0) of
                        true -> {drop_buffer(PT0), drop_newline(Rest1)};
                        false -> {PT0, Rest1}
                    end,
-    parse(Rest2, PT1#parsed_template{last_block=comment});
-% partial
-parse([${, ${, $>|Rest0], ParsedTemplate0) ->
-    {PartialName, Rest1} = read_til_close(Rest0, false),
+    {Rest2, PT1#parsed_template{last_block=comment}}.
+
+parse_partial(Rest0, ParsedTemplate0) ->
+    {PartialName, Rest1} = read_til_close(Rest0, ParsedTemplate0, false),
     Indent = get_indent(ParsedTemplate0),
     ParsedTemplate1 = flush_buffer(ParsedTemplate0, Rest1),
-    parse(Rest1, push_block({partial, PartialName, Indent}, ParsedTemplate1));
-% section begin
-parse([${, ${, $#|Rest], ParsedTemplate) ->
-    parse_section(Rest, ParsedTemplate, false);
-% inverted section
-parse([${, ${, $^|Rest], ParsedTemplate) ->
-    parse_section(Rest, ParsedTemplate, true);
-% section close
-parse([${, ${, $/|Rest0], ParsedTemplate0) ->
-    {SectionName, Rest1} = read_til_close(Rest0, false),
+    {Rest1, push_block({partial, PartialName, Indent}, ParsedTemplate1)}.
+
+parse_section_close(Rest0, ParsedTemplate0) ->
+    {SectionName, Rest1} = read_til_close(Rest0, ParsedTemplate0, false),
     ParsedTemplate1 = flush_buffer(ParsedTemplate0, Rest1),
-    {{section, SectionName, ParsedTemplate1}, Rest1};
-% triple moustache
-parse([${, ${, ${|Rest0], ParsedTemplate) ->
-    {Block, Rest1} = read_til_close(Rest0, true),
-    parse(Rest1, push_block({unsanitized_block, Block}, ParsedTemplate));
-% moustache block
-parse([${, ${|Rest0], ParsedTemplate) ->
-    {Block, Rest1} = read_til_close(Rest0, false),
-    parse(Rest1, push_block({sanitized_block, Block}, ParsedTemplate));
-% string literal
-parse([H|T], ParsedTemplate) ->
-    parse(T, push_literal(H, ParsedTemplate)).
+    {break, {section, SectionName, ParsedTemplate1}, Rest1}.
 
+parse_triple(Rest0, ParsedTemplate) ->
+    {Block, Rest1} = read_til_close(Rest0, ParsedTemplate, $}),
+    {Rest1, push_block({unsanitized_block, Block}, ParsedTemplate)}.
 
-%%====================================================================
-%% helper methods
-%%====================================================================
+parse_basic(Rest0, ParsedTemplate) ->
+    {Block, Rest1} = read_til_close(Rest0, ParsedTemplate, false),
+    {Rest1, push_block({sanitized_block, Block}, ParsedTemplate)}.
 
 parse_section(Rest0, ParsedTemplate0, Invert) ->
-    {SectionName, Rest1} = read_til_close(Rest0, false),
+    {SectionName, Rest1} = read_til_close(Rest0, ParsedTemplate0, false),
     ParsedTemplate1 = flush_buffer(ParsedTemplate0, Rest1),
     {Section, Rest2} = section_recur(Rest1, ParsedTemplate1),
     {section, SectionName, SectionTemplate} = Section,
@@ -75,7 +74,18 @@ parse_section(Rest0, ParsedTemplate0, Invert) ->
     Block = if Invert -> {inverted_section, SectionName, Body};
                true -> {section, SectionName, Body}
             end,
-    parse(Rest2, push_block(Block, ParsedTemplate2)).
+    {Rest2, push_block(Block, ParsedTemplate2)}.
+
+parse_delimiter(Rest0, ParsedTemplate0) ->
+    {BothDelimiters, Rest1} = read_til_close(Rest0, ParsedTemplate0, $=),
+    [Start, End] = string:split(BothDelimiters, " "),
+    {change, Start, Rest1,
+     ParsedTemplate0#parsed_template{start_delimiter=Start,
+                                     end_delimiter=End}}.
+
+%%====================================================================
+%% helper methods
+%%====================================================================
 
 is_standalone(#parsed_template{standalone=I, last_block=B}) ->
     I andalso (B =:= comment orelse B =:= section orelse B =:= partial).
@@ -123,17 +133,23 @@ finalize(PT=#parsed_template{literal_buffer=LB, template=T}, _End) ->
     PT#parsed_template{literal_buffer=[],
                        template=[{literal, lists:reverse(LB)}|T]}.
 
-drop_til_close([$}, $}|T]) -> T;
-drop_til_close([_|T]) ->
-    drop_til_close(T).
+drop_til_close(Template, #parsed_template{end_delimiter=End}) ->
+    {Rest, _} = read_loop(Template, End,
+                          fun(List, State) -> {break, List, State} end,
+                          fun(_C, State) -> State end,
+                          undefined),
+    Rest.
 
-read_til_close(Input, Triple) -> read_til_close(Input, Triple, []).
-
-read_til_close([$}, $}|T], false, Acc) ->
-    {string:trim(lists:reverse(Acc), both), T};
-read_til_close([$}, $}, $}|T], true, Acc) ->
-    {string:trim(lists:reverse(Acc), both), T};
-read_til_close([H|T], Triple, Acc) -> read_til_close(T, Triple, [H|Acc]).
+read_til_close(Template, #parsed_template{end_delimiter=End0}, Extra) ->
+    End1 = case Extra of
+               false -> End0;
+               Extra -> [Extra|End0]
+           end,
+    {Rest, Name} = read_loop(Template, End1,
+                             fun(List, State) -> {break, List, State} end,
+                             fun(C, State) -> [C|State] end,
+                             []),
+    {string:trim(lists:reverse(Name), both), Rest}.
 
 drop_newline([$\n|T]) -> T;
 drop_newline([$\r, $\n|T]) -> T;
@@ -179,4 +195,19 @@ get_indent(#parsed_template{literal_buffer=Buffer}) ->
     case lists:all(fun is_whitespace/1, Buffer) of
         true -> Buffer;
         false -> ""
+    end.
+
+read_loop([], _Match, _MatchFn, _NoMatchFn, State) -> {[], State};
+read_loop(List0=[H|T], Match0, MatchFn, NoMatchFn, State0) ->
+    case string:prefix(List0, Match0) of
+        nomatch ->
+            read_loop(T, Match0, MatchFn, NoMatchFn, NoMatchFn(H, State0));
+        List1 ->
+            case MatchFn(List1, State0) of
+                {change, Match1, List2, State1} ->
+                    read_loop(List2, Match1, MatchFn, NoMatchFn, State1);
+                {break, List2, State1} -> {List2, State1};
+                {List2, State1} ->
+                    read_loop(List2, Match0, MatchFn, NoMatchFn, State1)
+            end
     end.
