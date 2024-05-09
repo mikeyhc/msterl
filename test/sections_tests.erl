@@ -1,7 +1,7 @@
 -module(sections_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--import(templaterl, [render_string/2]).
+-import(mst, [render_string/2]).
 
 % expected: 34
 

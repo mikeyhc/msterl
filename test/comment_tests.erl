@@ -1,7 +1,7 @@
 -module(comment_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--import(templaterl, [render_string/1, render_string/2]).
+-import(mst, [render_string/1, render_string/2]).
 
 % expected: 12
 

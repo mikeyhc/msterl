@@ -1,4 +1,4 @@
--module(templaterl).
+-module(mst).
 
 %% API
 -export([render_file/1, render_file/2, render_file/3,

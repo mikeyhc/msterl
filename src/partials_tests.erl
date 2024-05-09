@@ -1,7 +1,7 @@
 -module(partials_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--import(templaterl, [render_string/3]).
+-import(mst, [render_string/3]).
 
 % expected: 12
 

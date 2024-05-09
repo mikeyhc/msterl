@@ -1,4 +1,4 @@
-{application, templaterl,
+{application, mst,
  [{description, "An erlang templating library"},
   {vsn, "0.1.0"},
   {registered, []},
