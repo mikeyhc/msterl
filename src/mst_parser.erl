@@ -5,7 +5,7 @@
 -record(parsed_template, {literal_buffer=[] :: string(),
                           standalone=true :: boolean(),
                           last_block=none :: none | comment | block | section |
-                                             partial,
+                                             partial | delimiter,
                           template=[],
                           start_delimiter="{{",
                           end_delimiter="}}"
@@ -17,7 +17,8 @@ parse(Template) ->
     lists:reverse(ParsedTemplate1#parsed_template.template).
 
 section_recur(Template, ParseState) ->
-    NPS = ParseState#parsed_template{literal_buffer=[],
+    NPS = ParseState#parsed_template{last_block=section,
+                                     literal_buffer=[],
                                      template=[]
                                     },
     parse(Template, NPS).
@@ -78,9 +79,11 @@ parse_section(Rest0, ParsedTemplate0, Invert) ->
 
 parse_delimiter(Rest0, ParsedTemplate0) ->
     {BothDelimiters, Rest1} = read_til_close(Rest0, ParsedTemplate0, $=),
-    [Start, End] = string:split(BothDelimiters, " "),
+    [Start, End] = lists:filter(fun([]) -> false; (_) -> true end,
+                                string:split(BothDelimiters, " ", all)),
     {change, Start, Rest1,
-     ParsedTemplate0#parsed_template{start_delimiter=Start,
+     ParsedTemplate0#parsed_template{last_block=delimiter,
+                                     start_delimiter=Start,
                                      end_delimiter=End}}.
 
 %%====================================================================
@@ -88,14 +91,22 @@ parse_delimiter(Rest0, ParsedTemplate0) ->
 %%====================================================================
 
 is_standalone(#parsed_template{standalone=I, last_block=B}) ->
-    I andalso (B =:= comment orelse B =:= section orelse B =:= partial).
+    I andalso (B =:= comment orelse B =:= section orelse B =:= partial orelse
+               B =:= delimiter).
 
 drop_buffer(ParsedTemplate) ->
     ParsedTemplate#parsed_template{literal_buffer=[]}.
 
+push_literal($\n, PT=#parsed_template{last_block=none,
+                                      standalone=true,
+                                      literal_buffer=LB,
+                                      template=T}) ->
+    PT#parsed_template{literal_buffer=[],
+                       standalone=true,
+                       template=[{literal, lists:reverse([$\n|LB])}|T]};
 push_literal($\n, PT=#parsed_template{standalone=true, last_block=LB}) when
       LB =:= comment orelse LB =:= section orelse LB =:= partial orelse
-      LB =:= none ->
+      LB =:= delimiter orelse LB =:= none ->
     PT#parsed_template{literal_buffer=[], last_block=none};
 push_literal($\n, PT=#parsed_template{literal_buffer=LB, template=T}) ->
     PT#parsed_template{literal_buffer=[],

@@ -6,7 +6,7 @@ definitely not fit for production use.
 
 currently passing tests:
 * [x] comments
-* [ ] delimiters
+* [x] delimiters
 * [ ] interpolation
 * [x] inverted sections
 * [x] partials
