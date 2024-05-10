@@ -41,16 +41,12 @@ render_string(Template, Data, Partials) ->
 render([], _Opts, Acc) -> lists:flatten(lists:reverse(Acc));
 render([{literal, L}|T], Opts, Acc) ->
     render(T, set_last(literal, Opts), [apply_indent(L, Opts)|Acc]);
-render([{sanitized_block, B}|T], Opts=#render_opts{ctx=Context}, Acc) ->
+render([{sanitized_block, Key}|T], Opts=#render_opts{ctx=Context}, Acc) ->
     try
-        Value = case B of
-                    [$&|Key] -> coerce(mst_context:get_value(Key, Context),
-                                       false);
-                    Key -> coerce(mst_context:get_value(Key, Context), true)
-                end,
+        Value = coerce(mst_context:get_value(Key, Context), true),
         render(T, set_last(block, Opts), [apply_indent(Value, Opts)|Acc])
     catch
-        E={invalid_dot_context, _, _} -> throw({E, {block, B}, {template, T},
+        E={invalid_dot_context, _, _} -> throw({E, {block, Key}, {template, T},
                                                 {rendered, Acc}})
     end;
 render([{unsanitized_block, B}|T], Opts=#render_opts{ctx=Context}, Acc) ->

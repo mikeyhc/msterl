@@ -30,6 +30,7 @@ parse(Template, ParsedTemplate=#parsed_template{start_delimiter=Start}) ->
                  ([$^|Rest], State) -> parse_section(Rest, State, true);
                  ([$/|Rest], State) -> parse_section_close(Rest, State);
                  ([${|Rest], State) -> parse_triple(Rest, State);
+                 ([$&|Rest], State) -> parse_ampersand(Rest, State);
                  ([$=|Rest], State) -> parse_delimiter(Rest, State);
                  (Rest, State) -> parse_basic(Rest, State)
               end,
@@ -62,6 +63,10 @@ parse_triple(Rest0, ParsedTemplate) ->
 parse_basic(Rest0, ParsedTemplate) ->
     {Block, Rest1} = read_til_close(Rest0, ParsedTemplate, false),
     {Rest1, push_block({sanitized_block, Block}, ParsedTemplate)}.
+
+parse_ampersand(Rest0, ParsedTemplate) ->
+    {Block, Rest1} = read_til_close(Rest0, ParsedTemplate, false),
+    {Rest1, push_block({unsanitized_block, Block}, ParsedTemplate)}.
 
 parse_section(Rest0, ParsedTemplate0, Invert) ->
     {SectionName, Rest1} = read_til_close(Rest0, ParsedTemplate0, false),

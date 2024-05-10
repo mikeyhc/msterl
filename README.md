@@ -4,14 +4,15 @@ A (slow and inefficient) erlang implementation of
 This was mostly to get familiar with the spec and have a bit of fun,
 definitely not fit for production use.
 
-currently passing tests:
+currently passing core tests:
 * [x] comments
 * [x] delimiters
-* [ ] interpolation
+* [x] interpolation
 * [x] inverted sections
 * [x] partials
 * [x] sections
 
+currently passing optional tests:
 * [ ] dynamic names
 * [ ] inheritance
 * [ ] lambdas

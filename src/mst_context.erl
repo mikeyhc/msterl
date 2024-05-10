@@ -37,23 +37,26 @@ get_value(Word, #context{context=Context}) ->
 
 walk_key(_Keys, []) -> undefined;
 walk_key(Keys, [Context|Contexts]) ->
-    case walk_key_context(Keys, Context) of
+    case walk_key_context(Keys, Context, true) of
         {ok, Value} -> Value;
-        error -> walk_key(Keys, Contexts)
+        retry -> walk_key(Keys, Contexts);
+        break -> undefined
     end.
 
-walk_key_context([], Context) -> {ok, Context};
-walk_key_context([Key|Keys], Context) when is_map(Context) ->
-    case maps:find(Key, Context) of
-        {ok, Value} -> walk_key_context(Keys, Value);
-        error -> error
+walk_key_context([], Context, _Root) -> {ok, Context};
+walk_key_context([Key|Keys], Context, Root) when is_map(Context) ->
+    case {maps:find(Key, Context), Root} of
+        {{ok, Value}, _Root} -> walk_key_context(Keys, Value, false);
+        {error, true} -> retry;
+        {error, false} -> break
     end;
-walk_key_context(Keys, [Context|Contexts]) ->
-    case walk_key_context(Keys, Context) of
+walk_key_context(Keys, [Context|Contexts], Root) ->
+    case walk_key_context(Keys, Context, Root) of
         {ok, Value} -> {ok, Value};
-        error -> walk_key_context(Keys, Contexts)
+        retry -> walk_key_context(Keys, Contexts, Root);
+        break -> break
     end;
-walk_key_context(_Key, _Context) -> error.
+walk_key_context(_Key, _Context, _Root) -> retry.
 
 is_scalar(V) ->
     is_binary(V) orelse
