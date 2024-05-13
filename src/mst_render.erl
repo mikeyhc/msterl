@@ -9,9 +9,8 @@
 %%====================================================================
 
 render(Template, Data, Partials) ->
-    ParsedTemplate = mst_parser:parse(Template),
     ParsedPartials = mst_partials:parse(Partials),
-    render_(ParsedTemplate,
+    render_(Template,
             #render_opts{ctx=mst_context:new(Data), partials=ParsedPartials},
             []).
 
