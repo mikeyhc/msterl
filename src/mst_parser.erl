@@ -58,15 +58,21 @@ parse_section_close(Rest0, ParsedTemplate0) ->
 
 parse_triple(Rest0, ParsedTemplate) ->
     {Block, Rest1} = read_til_close(Rest0, ParsedTemplate, $}),
-    {Rest1, push_block({unsanitized_block, Block}, ParsedTemplate)}.
+    {Rest1, push_block({unsanitized_block, Block,
+                        ParsedTemplate#parsed_template.standalone},
+                       ParsedTemplate)}.
 
 parse_basic(Rest0, ParsedTemplate) ->
     {Block, Rest1} = read_til_close(Rest0, ParsedTemplate, false),
-    {Rest1, push_block({sanitized_block, Block}, ParsedTemplate)}.
+    {Rest1, push_block({sanitized_block, Block,
+                        ParsedTemplate#parsed_template.standalone},
+                       ParsedTemplate)}.
 
 parse_ampersand(Rest0, ParsedTemplate) ->
     {Block, Rest1} = read_til_close(Rest0, ParsedTemplate, false),
-    {Rest1, push_block({unsanitized_block, Block}, ParsedTemplate)}.
+    {Rest1, push_block({unsanitized_block, Block,
+                        ParsedTemplate#parsed_template.standalone},
+                       ParsedTemplate)}.
 
 parse_section(Rest0, ParsedTemplate0, Invert) ->
     {SectionName, Rest1} = read_til_close(Rest0, ParsedTemplate0, false),
@@ -173,8 +179,8 @@ drop_newline(L) -> L.
 
 block_type({section, _, _}) -> section;
 block_type({inverted_section, _, _}) -> section;
-block_type({unsanitized_block, _}) -> block;
-block_type({sanitized_block, _}) -> block;
+block_type({unsanitized_block, _, _}) -> block;
+block_type({sanitized_block, _, _}) -> block;
 block_type({partial, _, _}) -> partial.
 
 is_whitespace($ ) -> true;

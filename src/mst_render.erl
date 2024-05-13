@@ -20,18 +20,21 @@ render(Template, Data, Partials) ->
 
 render_([], _Opts, Acc) -> lists:flatten(lists:reverse(Acc));
 render_([{literal, L}|T], Opts, Acc) ->
-    render_(T, set_last(literal, Opts), [apply_indent(L, Opts)|Acc]);
-render_([{sanitized_block, Key}|T], Opts=#render_opts{ctx=Context}, Acc) ->
+    render_(T, set_last(literal, Opts), [apply_indent(L, undefined, Opts)|Acc]);
+render_([{sanitized_block, Key, Standalone}|T],
+        Opts=#render_opts{ctx=Context}, Acc) ->
     try
         Value = coerce(mst_context:get_value(Key, Context), true),
-        render_(T, set_last(block, Opts), [apply_indent(Value, Opts)|Acc])
+        render_(T, set_last(block, Opts),
+                [apply_indent(Value, Standalone, Opts)|Acc])
     catch
         E={invalid_dot_context, _, _} -> throw({E, {block, Key}, {template, T},
                                                 {rendered, Acc}})
     end;
-render_([{unsanitized_block, B}|T], Opts=#render_opts{ctx=Context}, Acc) ->
+render_([{unsanitized_block, B, Standalone}|T],
+        Opts=#render_opts{ctx=Context}, Acc) ->
     Output = apply_indent(coerce(mst_context:get_value(B, Context), false),
-                          Opts),
+                          Standalone, Opts),
     render_(T, set_last(block, Opts), [Output|Acc]);
 render_([{section, SectionName, Section}|T], Opts=#render_opts{ctx=Context},
        Acc) ->
@@ -102,7 +105,11 @@ coerce(Value, true) when is_binary(Value) -> sanitize(binary_to_list(Value)).
 
 set_last(Type, Opts) -> Opts#render_opts{last=Type}.
 
-apply_indent(Literal, #render_opts{last=Last, indent=Indent})
+apply_indent(Literal, true, #render_opts{indent=Indent}) ->
+    Indent ++ Literal;
+apply_indent(Literal, false, _Opts) ->
+    Literal;
+apply_indent(Literal, _Force, #render_opts{last=Last, indent=Indent})
   when Last =:= none orelse Last =:= literal ->
     Indent ++ Literal;
-apply_indent(Literal, _Opts) -> Literal.
+apply_indent(Literal, _Force, _Opts) -> Literal.
